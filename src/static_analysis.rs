@@ -11,6 +11,7 @@ use crate::{
 };
 use rustc_demangle::demangle;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::Write;
 
 /// Register state recorded after executing one instruction
 ///
@@ -456,6 +457,31 @@ impl<'a> Analysis<'a> {
             self.executable.get_loader(),
             self.executable.get_sbpf_version(),
         )
+    }
+
+    /// Disassembles the analyzed executable into a vector of strings, one per instruction line
+    pub fn disassemble_to_strings(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut last_basic_block = usize::MAX;
+        let mut result = Vec::new();
+        for (pc, insn) in self.instructions.iter().enumerate() {
+            let mut writer = Vec::new();
+            self.disassemble_label(
+                &mut writer,
+                Some(insn) == self.instructions.first(),
+                insn.ptr,
+                &mut last_basic_block,
+            )?;
+            writeln!(
+                &mut writer,
+                "{0:8x} {1}",
+                pc,
+                self.disassemble_instruction(insn, pc)
+            )?;
+            result.push(
+                String::from_utf8(writer).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?,
+            );
+        }
+        Ok(result)
     }
 
     /// Generates assembler code for the analyzed executable

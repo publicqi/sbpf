@@ -197,8 +197,9 @@ impl X86Instruction {
     }
 
     /// Arithmetic or logic
-    pub const fn alu(
+    pub const fn alu_escaped(
         size: OperandSize,
+        opcode_escape_sequence: u8,
         opcode: u8,
         source: X86Register,
         destination: X86Register,
@@ -207,6 +208,7 @@ impl X86Instruction {
         exclude_operand_sizes!(size, OperandSize::S0 | OperandSize::S8 | OperandSize::S16);
         Self {
             size,
+            opcode_escape_sequence,
             opcode,
             first_operand: source as u8,
             second_operand: destination as u8,
@@ -216,8 +218,9 @@ impl X86Instruction {
     }
 
     /// Arithmetic or logic
-    pub const fn alu_immediate(
+    pub const fn alu_immediate_escaped(
         size: OperandSize,
+        opcode_escape_sequence: u8,
         opcode: u8,
         opcode_extension: u8,
         destination: X86Register,
@@ -227,6 +230,7 @@ impl X86Instruction {
         exclude_operand_sizes!(size, OperandSize::S0 | OperandSize::S8 | OperandSize::S16);
         Self {
             size,
+            opcode_escape_sequence,
             opcode,
             first_operand: opcode_extension,
             second_operand: destination as u8,
@@ -240,6 +244,37 @@ impl X86Instruction {
             indirect,
             ..X86Instruction::DEFAULT
         }
+    }
+
+    /// Arithmetic or logic
+    pub const fn alu(
+        size: OperandSize,
+        opcode: u8,
+        source: X86Register,
+        destination: X86Register,
+        indirect: Option<X86IndirectAccess>,
+    ) -> Self {
+        Self::alu_escaped(size, 0, opcode, source, destination, indirect)
+    }
+
+    /// Arithmetic or logic
+    pub const fn alu_immediate(
+        size: OperandSize,
+        opcode: u8,
+        opcode_extension: u8,
+        destination: X86Register,
+        immediate: i64,
+        indirect: Option<X86IndirectAccess>,
+    ) -> Self {
+        Self::alu_immediate_escaped(
+            size,
+            0,
+            opcode,
+            opcode_extension,
+            destination,
+            immediate,
+            indirect,
+        )
     }
 
     /// Move source to destination
@@ -567,7 +602,7 @@ impl X86Instruction {
         // Load full u64 imm into u64 reg
         Self {
             size,
-            opcode: 0xb8 | ((destination as u8) & 0b111),
+            opcode: (0xb8 | ((destination as u8) & 0b111)),
             modrm: false,
             second_operand: destination as u8,
             immediate_size: size,

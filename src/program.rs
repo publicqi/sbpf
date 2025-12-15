@@ -17,7 +17,7 @@ pub enum SBPFVersion {
     V1,
     /// SIMD-0174, SIMD-0173
     V2,
-    /// SIMD-0178, SIMD-0179, SIMD-0189
+    /// SIMD-0178, SIMD-0189, SIMD-0377
     V3,
     /// SIMD-0177
     V4,
@@ -27,50 +27,55 @@ pub enum SBPFVersion {
 
 impl SBPFVersion {
     /// Enable SIMD-0166: SBPF dynamic stack frames
-    pub fn dynamic_stack_frames(self) -> bool {
+    ///
+    /// Allows usage of `add64 r10, imm`.
+    pub fn manual_stack_frame_bump(self) -> bool {
         self >= SBPFVersion::V1
+    }
+    /// ... SIMD-0377
+    ///
+    /// Initializes the stack at the bottom with one frame,
+    /// then add one frame at every `call` and `callx`.
+    pub fn automatic_stack_frame_bump(self) -> bool {
+        self != SBPFVersion::V1 && self != SBPFVersion::V2
     }
 
     /// Enable SIMD-0174: SBPF arithmetics improvements
     pub fn enable_pqr(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0174
     pub fn explicit_sign_extension_of_results(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0174
     pub fn swap_sub_reg_imm_operands(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0174
     pub fn disable_neg(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
 
     /// Enable SIMD-0173: SBPF instruction encoding improvements
     pub fn callx_uses_src_reg(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0173
     pub fn disable_lddw(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0173
     pub fn disable_le(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
     /// ... SIMD-0173
     pub fn move_memory_instruction_classes(self) -> bool {
-        self >= SBPFVersion::V2
+        self == SBPFVersion::V2
     }
 
     /// Enable SIMD-0178: SBPF Static Syscalls
     pub fn static_syscalls(self) -> bool {
-        self >= SBPFVersion::V3
-    }
-    /// Enable SIMD-0179: SBPF stricter verification constraints
-    pub fn enable_stricter_verification(self) -> bool {
         self >= SBPFVersion::V3
     }
     /// Enable SIMD-0189: SBPF stricter ELF headers
@@ -78,19 +83,16 @@ impl SBPFVersion {
         self >= SBPFVersion::V3
     }
     /// ... SIMD-0189
-    pub fn enable_lower_bytecode_vaddr(self) -> bool {
+    pub fn enable_lower_rodata_vaddr(self) -> bool {
         self >= SBPFVersion::V3
     }
-
-    /// Ensure that rodata sections don't exceed their maximum allowed size and
-    /// overlap with the stack
-    pub fn reject_rodata_stack_overlap(self) -> bool {
-        self != SBPFVersion::V0
+    /// ... SIMD-0377
+    pub fn enable_jmp32(self) -> bool {
+        self >= SBPFVersion::V3
     }
-
-    /// Allow sh_addr != sh_offset in elf sections.
-    pub fn enable_elf_vaddr(self) -> bool {
-        self != SBPFVersion::V0
+    /// ... SIMD-0377
+    pub fn callx_uses_dst_reg(self) -> bool {
+        self >= SBPFVersion::V3
     }
 
     /// Calculate the target program counter for a CALL_IMM instruction depending on

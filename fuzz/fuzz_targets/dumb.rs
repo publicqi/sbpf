@@ -8,7 +8,7 @@ use solana_sbpf::{
     ebpf,
     elf::Executable,
     memory_region::MemoryRegion,
-    program::{BuiltinFunction, BuiltinProgram, FunctionRegistry, SBPFVersion},
+    program::{BuiltinFunction, BuiltinProgram, FunctionRegistry},
     verifier::{RequisiteVerifier, Verifier},
 };
 use test_utils::{create_vm, TestContextObject};
@@ -26,21 +26,28 @@ struct DumbFuzzData {
 
 fuzz_target!(|data: DumbFuzzData| {
     let prog = data.prog;
+    let sbpf_version = data.template.sbpf_version;
     let config = data.template.into();
     let function_registry = FunctionRegistry::default();
     let syscall_registry = FunctionRegistry::<BuiltinFunction<TestContextObject>>::default();
 
-    if RequisiteVerifier::verify(&prog, &config, SBPFVersion::V3, &function_registry, &syscall_registry).is_err() {
+    if RequisiteVerifier::verify(
+        &prog,
+        &config,
+        sbpf_version,
+        &function_registry,
+        &syscall_registry,
+    )
+    .is_err()
+    {
         // verify please
         return;
     }
     let mut mem = data.mem;
     let executable = Executable::<TestContextObject>::from_text_bytes(
         &prog,
-        std::sync::Arc::new(BuiltinProgram::new_loader(
-            config,
-        )),
-        SBPFVersion::V3,
+        std::sync::Arc::new(BuiltinProgram::new_loader(config)),
+        sbpf_version,
         function_registry,
     )
     .unwrap();

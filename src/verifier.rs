@@ -151,12 +151,12 @@ fn check_load_dw(prog: &[u8], insn_ptr: usize) -> Result<(), VerifierError> {
 fn check_jmp_offset(
     prog: &[u8],
     insn_ptr: usize,
-    function_range: &std::ops::Range<usize>,
+    program_range: &std::ops::Range<usize>,
 ) -> Result<(), VerifierError> {
     let insn = ebpf::get_insn(prog, insn_ptr);
 
     let dst_insn_ptr = insn_ptr as isize + 1 + insn.off as isize;
-    if dst_insn_ptr < 0 || !function_range.contains(&(dst_insn_ptr as usize)) {
+    if dst_insn_ptr < 0 || !program_range.contains(&(dst_insn_ptr as usize)) {
         return Err(VerifierError::JumpOutOfCode(
             dst_insn_ptr as usize,
             insn_ptr,
@@ -184,7 +184,9 @@ fn check_registers(
 
     match (insn.dst, store) {
         (0..=9, _) | (10, true) => Ok(()),
-        (10, false) if sbpf_version.dynamic_stack_frames() && insn.opc == ebpf::ADD64_IMM => Ok(()),
+        (10, false) if sbpf_version.manual_stack_frame_bump() && insn.opc == ebpf::ADD64_IMM => {
+            Ok(())
+        }
         (10, false) => Err(VerifierError::CannotWriteR10(insn_ptr)),
         (_, _) => Err(VerifierError::InvalidDestinationRegister(insn_ptr)),
     }
@@ -209,6 +211,8 @@ fn check_callx_register(
 ) -> Result<(), VerifierError> {
     let reg = if sbpf_version.callx_uses_src_reg() {
         insn.src as i64
+    } else if sbpf_version.callx_uses_dst_reg() {
+        insn.dst as i64
     } else {
         insn.imm
     };
@@ -224,35 +228,14 @@ pub struct RequisiteVerifier {}
 impl Verifier for RequisiteVerifier {
     /// Check the program against the verifier's rules
     #[rustfmt::skip]
-    fn verify<C: ContextObject>(prog: &[u8], _config: &Config, sbpf_version: SBPFVersion, _function_registry: &FunctionRegistry<usize>, syscall_registry: &FunctionRegistry<BuiltinFunction<C>>) -> Result<(), VerifierError> {
+    fn verify<C: ContextObject>(prog: &[u8], _config: &Config, sbpf_version: SBPFVersion, _function_registry: &FunctionRegistry<usize>, _syscall_registry: &FunctionRegistry<BuiltinFunction<C>>) -> Result<(), VerifierError> {
         check_prog_len(prog)?;
 
         let program_range = 0..prog.len() / ebpf::INSN_SIZE;
-        let mut function_range = program_range.start..program_range.end;
         let mut insn_ptr: usize = 0;
-        if sbpf_version.enable_stricter_verification() && !ebpf::get_insn(prog, insn_ptr).is_function_start_marker() {
-            return Err(VerifierError::InvalidFunction(0));
-        }
         while (insn_ptr + 1) * ebpf::INSN_SIZE <= prog.len() {
             let insn = ebpf::get_insn(prog, insn_ptr);
             let mut store = false;
-
-            if sbpf_version.enable_stricter_verification() && insn.is_function_start_marker() {
-                function_range = insn_ptr..insn_ptr.saturating_add(1);
-                while function_range.end < program_range.end &&
-                    !ebpf::get_insn(prog, function_range.end).is_function_start_marker() {
-                    function_range.end = function_range.end.saturating_add(1);
-                }
-                let insn = ebpf::get_insn(prog, function_range.end.saturating_sub(1));
-                match insn.opc {
-                    ebpf::JA | ebpf::RETURN => {},
-                    _ => {
-                        return Err(VerifierError::InvalidFunction(
-                            function_range.end.saturating_sub(1),
-                        ))
-                    },
-                }
-            }
 
             match insn.opc {
                 ebpf::LD_DW_IMM if !sbpf_version.disable_lddw() => {
@@ -312,7 +295,7 @@ impl Verifier for RequisiteVerifier {
                 ebpf::BE         => { check_imm_endian(&insn, insn_ptr)?; },
 
                 // BPF_ALU64_STORE class
-                ebpf::ADD64_IMM  if insn.dst == ebpf::FRAME_PTR_REG as u8 && sbpf_version.dynamic_stack_frames() => {
+                ebpf::ADD64_IMM  if insn.dst == ebpf::FRAME_PTR_REG as u8 && sbpf_version.manual_stack_frame_bump() => {
                     check_imm_aligned(&insn, insn_ptr, 64)?;
                 },
                 ebpf::ADD64_IMM  => {},
@@ -376,47 +359,57 @@ impl Verifier for RequisiteVerifier {
                 ebpf::SREM64_IMM if sbpf_version.enable_pqr() => { check_imm_nonzero(&insn, insn_ptr)?; },
                 ebpf::SREM64_REG if sbpf_version.enable_pqr() => {},
 
-                // BPF_JMP class
-                ebpf::JA         => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JEQ_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JEQ_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JGT_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JGT_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JGE_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JGE_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JLT_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JLT_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JLE_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JLE_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSET_IMM   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSET_REG   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JNE_IMM    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JNE_REG    => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSGT_IMM   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSGT_REG   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSGE_IMM   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSGE_REG   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSLT_IMM   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSLT_REG   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSLE_IMM   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::JSLE_REG   => { check_jmp_offset(prog, insn_ptr, &function_range)?; },
-                ebpf::CALL_IMM   if sbpf_version.static_syscalls() => {
-                    let target_pc = sbpf_version.calculate_call_imm_target_pc(insn_ptr, insn.imm);
-                    if !program_range.contains(&(target_pc as usize)) ||
-                       !ebpf::get_insn(prog, target_pc as usize).is_function_start_marker() {
-                        return Err(VerifierError::InvalidFunction(target_pc as usize));
-                    }
-                },
+                // BPF_JMP32 class
+                ebpf::JEQ32_IMM
+                | ebpf::JEQ32_REG
+                | ebpf::JGT32_IMM
+                | ebpf::JGT32_REG
+                | ebpf::JGE32_IMM
+                | ebpf::JGE32_REG
+                | ebpf::JLT32_IMM
+                | ebpf::JLT32_REG
+                | ebpf::JLE32_IMM
+                | ebpf::JLE32_REG
+                | ebpf::JSET32_IMM
+                | ebpf::JSET32_REG
+                | ebpf::JNE32_IMM
+                | ebpf::JNE32_REG
+                | ebpf::JSGT32_IMM
+                | ebpf::JSGT32_REG
+                | ebpf::JSGE32_IMM
+                | ebpf::JSGE32_REG
+                | ebpf::JSLT32_IMM
+                | ebpf::JSLT32_REG
+                | ebpf::JSLE32_IMM
+                | ebpf::JSLE32_REG if sbpf_version.enable_jmp32() => { check_jmp_offset(prog, insn_ptr, &program_range)?; },
+
+                // BPF_JMP64 class
+                ebpf::JA
+                | ebpf::JEQ64_IMM
+                | ebpf::JEQ64_REG
+                | ebpf::JGT64_IMM
+                | ebpf::JGT64_REG
+                | ebpf::JGE64_IMM
+                | ebpf::JGE64_REG
+                | ebpf::JLT64_IMM
+                | ebpf::JLT64_REG
+                | ebpf::JLE64_IMM
+                | ebpf::JLE64_REG
+                | ebpf::JSET64_IMM
+                | ebpf::JSET64_REG
+                | ebpf::JNE64_IMM
+                | ebpf::JNE64_REG
+                | ebpf::JSGT64_IMM
+                | ebpf::JSGT64_REG
+                | ebpf::JSGE64_IMM
+                | ebpf::JSGE64_REG
+                | ebpf::JSLT64_IMM
+                | ebpf::JSLT64_REG
+                | ebpf::JSLE64_IMM
+                | ebpf::JSLE64_REG   => { check_jmp_offset(prog, insn_ptr, &program_range)?; },
                 ebpf::CALL_IMM   => {},
                 ebpf::CALL_REG   => { check_callx_register(&insn, insn_ptr, sbpf_version)?; },
-                ebpf::EXIT       if !sbpf_version.static_syscalls()   => {},
-                ebpf::RETURN     if sbpf_version.static_syscalls()    => {},
-                ebpf::SYSCALL    if sbpf_version.static_syscalls()    => {
-                    syscall_registry
-                        .lookup_by_key(insn.imm as u32)
-                        .map(|_| ())
-                        .ok_or(VerifierError::InvalidSyscall(insn.imm as u32))?;
-                },
+                ebpf::EXIT       => {},
 
                 _                => {
                     return Err(VerifierError::UnknownOpCode(insn.opc, insn_ptr));
